@@ -3,12 +3,12 @@ import json
 import os
 import re
 import warnings
-import google.genai as genai
+import streamlit as st
 from PIL import Image
 import requests
-import streamlit as st
+import google.genai as genai
 
-# 경고창 숨김
+# 경고 숨김
 warnings.filterwarnings("ignore")
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 
@@ -16,24 +16,26 @@ os.environ["GRPC_VERBOSITY"] = "ERROR"
 # [페이지 설정 및 비밀번호 보안]
 # ==========================================
 st.set_page_config(
-    page_title="블로그 맞춤 초안 생성기", page_icon="✍️", layout="wide"
+    page_title="블로그 맞춤 초안 생성기",
+    page_icon="✍️",
+    layout="wide"
 )
 
 MY_PASSWORD = "1234"
 
 if "authenticated" not in st.session_state:
-  st.session_state["authenticated"] = False
+    st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
-  st.title("🔒 블로그 생성기 로그인")
-  pwd = st.text_input("접속 비밀번호를 입력하세요", type="password")
-  if st.button("접속하기"):
-    if pwd == MY_PASSWORD:
-      st.session_state["authenticated"] = True
-      st.rerun()
-    else:
-      st.error("비밀번호가 일치하지 않습니다.")
-  st.stop()
+    st.title("🔒 블로그 생성기 로그인")
+    pwd = st.text_input("접속 비밀번호를 입력하세요", type="password")
+    if st.button("접속하기", use_container_width=True):
+        if pwd == MY_PASSWORD:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 일치하지 않습니다.")
+    st.stop()
 
 # ==========================================
 # [설정 및 API 키]
@@ -43,98 +45,131 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ==========================================
+# [서버 튕김 방지: 초경량 이미지 압축 헬퍼]
+# ==========================================
+def process_mobile_image(file_obj, max_dim=1024):
+    """모바일 원본 대용량 사진을 초경량화하여 서버 메모리 폭주 원천 차단"""
+    try:
+        img = Image.open(file_obj)
+        # 투명 배경 RGBA -> RGB 변환
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        # 가로/세로 최대 1024px로 리사이징
+        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        
+        # JPEG 압축
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=80, optimize=True)
+        buffer.seek(0)
+        return Image.open(buffer)
+    except Exception:
+        return None
+
+
+# ==========================================
 # [웹/모바일 클립보드 복사 컴포넌트]
 # ==========================================
-def render_copy_button(
-    text_to_copy, button_label="📋 복사", is_table=False, table_data=None
-):
-  if is_table and table_data:
-    tsv_lines = [
-        f"{row.get('항목', '')}\t{row.get('내용', '')}" for row in table_data
-    ]
-    tsv_content = (
-        "\\n".join(tsv_lines)
-        .replace('"', '\\"')
-        .replace("'", "\\'")
-        .replace("\r", "")
-    )
-    js_code = f"""
-        <button onclick="navigator.clipboard.writeText('{tsv_content}').then(() => alert('표가 복사되었습니다! 네이버 에디터에 Ctrl+V 하세요.'));" 
-        style="background-color:#03c75a; color:white; border:none; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:14px; width:100%;">
+def render_copy_button(text_to_copy, button_label="📋 복사", is_table=False, table_data=None):
+    if is_table and table_data:
+        tsv_lines = [f"{row.get('항목', '')}\t{row.get('내용', '')}" for row in table_data]
+        tsv_content = "\\n".join(tsv_lines).replace('"', '\\"').replace("'", "\\'").replace("\r", "")
+        js_code = f"""
+        <button onclick="
+            const text = '{tsv_content}';
+            navigator.clipboard.writeText(text).then(() => {{
+                alert('표가 복사되었습니다! 네이버 블로그 본문에 붙여넣기(Ctrl+V) 하세요.');
+            }}).catch(() => {{
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                alert('표가 복사되었습니다!');
+            }});
+        " style="background-color:#03c75a; color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:14px; width:100%; touch-action: manipulation;">
         {button_label}
         </button>
         """
-  else:
-    clean_txt = (
-        text_to_copy.replace("#", "")
-        .replace("'", "\\'")
-        .replace('"', '\\"')
-        .replace("\r", "")
-        .replace("\n", "\\n")
-    )
-    js_code = f"""
-        <button onclick="navigator.clipboard.writeText('{clean_txt}').then(() => alert('복사되었습니다!'));" 
-        style="background-color:#f1f3f5; color:#333; border:1px solid #ced4da; padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600; width:100%;">
+    else:
+        clean_txt = text_to_copy.replace("#", "").replace("'", "\\'").replace('"', '\\"').replace("\r", "").replace("\n", "\\n")
+        js_code = f"""
+        <button onclick="
+            const text = '{clean_txt}';
+            navigator.clipboard.writeText(text).then(() => {{
+                alert('복사되었습니다!');
+            }}).catch(() => {{
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                alert('복사되었습니다!');
+            }});
+        " style="background-color:#f1f3f5; color:#333; border:1px solid #ced4da; padding:9px 12px; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600; width:100%; touch-action: manipulation;">
         {button_label}
         </button>
         """
-  st.components.v1.html(js_code, height=45)
+    st.components.v1.html(js_code, height=52)
 
 
 # ==========================================
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("갤탭 & 모바일 완벽 지원 | C-Rank & D.I.A+ 최적화")
+st.caption("갤탭 & 모바일 완벽 최적화 | C-Rank & D.I.A+ 알고리즘")
 
-col1, col2 = st.columns([1, 1])
+category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
+item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
+target_keyword = st.text_input("필수 키워드 (쉼표 구분)", placeholder="예: 다이소스티커, 스티커북, 두돌아기놀이책")
+extra_notes = st.text_area("상세 메모 및 솔직 후기 팁", placeholder="솔직한 장단점, 실제 놀아준 팁 등을 적어주세요.", height=70)
 
-with col1:
-  category = st.selectbox(
-      "카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"]
-  )
-  item_name = st.text_input(
-      "장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북"
-  )
-  target_keyword = st.text_input(
-      "필수 키워드 (쉼표 구분)", placeholder="예: 다이소스티커, 스티커북, 두돌아기놀이책"
-  )
-  extra_notes = st.text_area(
-      "상세 메모 및 솔직 후기 팁",
-      placeholder="솔직한 장단점, 실제 놀아준 팁 등을 적어주세요.",
-      height=80,
-  )
+st.write("---")
 
-with col2:
-  info_files = st.file_uploader(
-      "📌 메뉴판 / 스펙 / 정보 사진 (선택 사항)",
-      type=["png", "jpg", "jpeg", "webp"],
-      accept_multiple_files=True,
-  )
-  body_files = st.file_uploader(
-      "📷 본문 사진 (필수: 갤러리에서 여러 장 선택 가능)",
-      type=["png", "jpg", "jpeg", "webp"],
-      accept_multiple_files=True,
-  )
+info_files = st.file_uploader(
+    "📌 메뉴판 / 스펙 / 정보 사진 (선택 사항)", 
+    type=["png", "jpg", "jpeg", "webp"], 
+    accept_multiple_files=True
+)
 
-st.divider()
+body_files = st.file_uploader(
+    "📷 본문 사진 (필수: 갤러리에서 여러 장 선택 가능)", 
+    type=["png", "jpg", "jpeg", "webp"], 
+    accept_multiple_files=True
+)
 
-if st.button(
-    "✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True
-):
-  if not item_name or not target_keyword:
-    st.warning("명칭과 필수 키워드를 입력해 주세요!")
-    st.stop()
+if body_files:
+    st.info(f"선택된 본문 사진: 총 {len(body_files)}장")
 
-  if not body_files:
-    st.warning("본문 사진을 최소 1장 이상 등록해 주세요!")
-    st.stop()
+st.write("---")
 
-  with st.spinner("⚡ 네이버 최적화 초안 작성 중... (약 15~25초 소요)"):
-    pasted_images = [Image.open(f) for f in body_files]
-    info_images = [Image.open(f) for f in info_files] if info_files else []
+if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
+    if not item_name or not target_keyword:
+        st.warning("명칭과 필수 키워드를 입력해 주세요!")
+        st.stop()
+        
+    if not body_files:
+        st.warning("본문 사진을 최소 1장 이상 등록해 주세요!")
+        st.stop()
 
-    system_instruction = """
+    with st.spinner("⚡ 사진 최적화 및 네이버 맞춤 초안 작성 중... (약 15~25초 소요)"):
+        # 1. 사진 경량화 압축 진행 (메모리 튕김 방지)
+        pasted_images = []
+        for f in body_files:
+            compressed = process_mobile_image(f)
+            if compressed:
+                pasted_images.append(compressed)
+                
+        info_images = []
+        if info_files:
+            for f in info_files:
+                compressed = process_mobile_image(f)
+                if compressed:
+                    info_images.append(compressed)
+
+        system_instruction = """
 너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 인기 육아/생활 블로거야.
 네이버 스마트에디터 ONE의 실제 작성 루틴(메인 썸네일 -> 도입 설명 -> Q&A 인용구 -> Q&A 연결 본문 -> 상단 요약 표 -> 소제목 & 본문 반복 -> 하단 총평 표 -> 태그)에 맞춰 결과를 JSON으로 응답해.
 
@@ -196,7 +231,7 @@ if st.button(
 }
 """
 
-    prompt_text = f"""
+        prompt_text = f"""
 [카테고리]: {category}
 [장소/상호/교구/제품명]: {item_name}
 [필수 핵심 키워드]: {target_keyword}
@@ -207,152 +242,123 @@ if st.button(
 순수 JSON 형식으로만 응답해줘.
 """
 
-    payload = [prompt_text]
-    if info_images:
-      payload.append("\n[메뉴판/정보 사진]:\n")
-      payload.extend(info_images)
-    payload.append("\n[본문 포스팅 사진]:\n")
-    payload.extend(pasted_images)
+        payload = [prompt_text]
+        if info_images:
+            payload.append("\n[메뉴판/정보 사진]:\n")
+            payload.extend(info_images)
+        payload.append("\n[본문 포스팅 사진]:\n")
+        payload.extend(pasted_images)
 
-    try:
-      res = client.models.generate_content(
-          model="gemini-3.8-flash",
-          contents=payload,
-          config=dict(
-              system_instruction=system_instruction,
-              response_mime_type="application/json",
-          ),
-      )
-      raw = res.text.strip()
-      if raw.startswith("```json"):
-        raw = raw[7:]
-      if raw.endswith("```"):
-        raw = raw[:-3]
-      data = json.loads(raw.strip())
-      st.session_state["result_data"] = data
-    except Exception as e:
-      st.error(f"생성 중 오류가 발생했습니다: {e}")
+        try:
+            res = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=payload,
+                config=dict(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json"
+                )
+            )
+            raw = res.text.strip()
+            if raw.startswith("```json"):
+                raw = raw[7:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            data = json.loads(raw.strip())
+            st.session_state["result_data"] = data
+        except Exception as e:
+            st.error(f"생성 중 오류가 발생했습니다: {e}")
 
 # ==========================================
 # [결과 출력 리스트 렌더링]
 # ==========================================
 if "result_data" in st.session_state:
-  data = st.session_state["result_data"]
+    data = st.session_state["result_data"]
+    
+    st.success("🎉 작성이 완료되었습니다! 순서대로 복사해서 네이버 블로그에 붙여넣으세요.")
+    
+    # 1. 제목 영역
+    with st.expander("📌 네이버 추천 제목 (선택 복사)", expanded=True):
+        for i, t in enumerate(data.get("titles", []), start=1):
+            st.markdown(f"**{i}안:** {t}")
+            render_copy_button(t, f"{i}안 제목 복사")
+            st.write("")
 
-  st.success("🎉 글 생성이 완료되었습니다! 순서대로 복사해서 사용하세요.")
+    # 2. 사진 1 도입부
+    with st.expander("📷 사진 1 (대표 썸네일) 아래 구성 요소", expanded=True):
+        tag_main = data.get("main_image_tags", "")
+        if tag_main:
+            st.markdown(f"**사진 1 태그:** `{tag_main}`")
+            render_copy_button(tag_main, "태그 복사")
+            st.write("")
+        
+        intro_desc = data.get("intro_description", "")
+        st.markdown(f"**[도입 설명]**\n\n{intro_desc}")
+        render_copy_button(intro_desc, "도입 설명글 복사")
+        st.write("")
+        
+        qna_list = data.get("qna_questions", [])
+        qna_txt = "\n".join(qna_list) if isinstance(qna_list, list) else str(qna_list)
+        st.info(f"**[Q&A 질문 - 인용구용]**\n\n{qna_txt}")
+        render_copy_button(qna_txt, "Q&A 인용구 복사")
+        st.write("")
+        
+        intro_bridge = data.get("intro_bridge", "")
+        st.markdown(f"**[연결 본문글]**\n\n{intro_bridge}")
+        render_copy_button(intro_bridge, "연결 본문글 복사")
 
-  # 1. 제목 영역
-  with st.expander("📌 네이버 추천 제목 (선택 복사)", expanded=True):
-    for i, t in enumerate(data.get("titles", []), start=1):
-      c_txt, c_btn = st.columns([5, 1])
-      c_txt.markdown(f"**{i}안:** {t}")
-      with c_btn:
-        render_copy_button(t, f"{i}안 복사")
+    # 3. 상단 요약 표
+    with st.expander("📊 상단 요약 표 (스마트에디터 표 연동)", expanded=True):
+        s_table = data.get("summary_table_data", [])
+        if s_table:
+            for r in s_table:
+                st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
+            render_copy_button("", button_label="📊 요약 표 복사 (스마트에디터 표 자동 변환)", is_table=True, table_data=s_table)
 
-  # 2. 사진 1 도입부
-  with st.expander("📷 사진 1 (대표 썸네일) 아래 구성 요소", expanded=True):
-    tag_main = data.get("main_image_tags", "")
-    if tag_main:
-      c1, c2 = st.columns([5, 1])
-      c1.markdown(f"**사진 1 태그:** `{tag_main}`")
-      with c2:
-        render_copy_button(tag_main, "태그 복사")
+    # 4. 본문 사진별 카드
+    with st.expander("✍️ 사진별 소제목 & 본문 내용", expanded=True):
+        for sec in data.get("body_sections", []):
+            p_idx = sec.get("photo_index", 2)
+            st.markdown(f"#### 📷 본문 사진 {p_idx}")
+            
+            sub = sec.get("subheading", "")
+            if sub:
+                st.markdown(f"**소제목:** {sub}")
+                render_copy_button(sub, "소제목 복사")
+                
+            p_tag = sec.get("tags", "")
+            if p_tag:
+                st.markdown(f"**사진 태그:** `{p_tag}`")
+                render_copy_button(p_tag, "태그 복사")
+                
+            opt1 = sec.get("option_1", "")
+            if opt1:
+                st.markdown(f"**옵션 1 (설명형):**\n\n{opt1}")
+                render_copy_button(opt1, "1번 본문 복사")
+                
+            opt2 = sec.get("option_2", "")
+            if opt2:
+                st.markdown(f"**옵션 2 (감성/반응형):**\n\n{opt2}")
+                render_copy_button(opt2, "2번 본문 복사")
+            st.divider()
 
-    intro_desc = data.get("intro_description", "")
-    c1, c2 = st.columns([5, 1])
-    c1.markdown(f"**[도입 설명]**\n\n{intro_desc}")
-    with c2:
-      render_copy_button(intro_desc, "설명글 복사")
+    # 5. 하단 총평 표
+    with st.expander("📊 하단 총평 표 & 솔직 후기 마무리", expanded=True):
+        r_table = data.get("review_table_data", [])
+        if r_table:
+            for r in r_table:
+                st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
+            render_copy_button("", button_label="📊 총평 표 복사 (스마트에디터 표 자동 변환)", is_table=True, table_data=r_table)
+            st.write("")
+            
+        closing = data.get("closing_remarks", "")
+        if closing:
+            st.markdown(f"**[마무리 소감]**\n\n{closing}")
+            render_copy_button(closing, "총평 소감 복사")
 
-    qna_list = data.get("qna_questions", [])
-    qna_txt = (
-        "\n".join(qna_list) if isinstance(qna_list, list) else str(qna_list)
-    )
-    c1, c2 = st.columns([5, 1])
-    c1.info(f"**[Q&A 질문 - 인용구용]**\n\n{qna_txt}")
-    with c2:
-      render_copy_button(qna_txt, "인용구 복사")
-
-    intro_bridge = data.get("intro_bridge", "")
-    c1, c2 = st.columns([5, 1])
-    c1.markdown(f"**[연결 본문글]**\n\n{intro_bridge}")
-    with c2:
-      render_copy_button(intro_bridge, "연결글 복사")
-
-  # 3. 상단 요약 표
-  with st.expander("📊 상단 요약 표 (스마트에디터 표 연동)", expanded=True):
-    s_table = data.get("summary_table_data", [])
-    if s_table:
-      for r in s_table:
-        st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
-      render_copy_button(
-          "",
-          button_label="📊 요약 표 복사 (스마트에디터 표 자동 변환)",
-          is_table=True,
-          table_data=s_table,
-      )
-
-  # 4. 본문 사진별 카드
-  with st.expander("✍️ 사진별 소제목 & 본문 내용", expanded=True):
-    for sec in data.get("body_sections", []):
-      p_idx = sec.get("photo_index", 2)
-      st.markdown(f"#### 📷 본문 사진 {p_idx}")
-
-      sub = sec.get("subheading", "")
-      if sub:
-        c1, c2 = st.columns([5, 1])
-        c1.markdown(f"**소제목:** {sub}")
-        with c2:
-          render_copy_button(sub, "소제목 복사")
-
-      p_tag = sec.get("tags", "")
-      if p_tag:
-        c1, c2 = st.columns([5, 1])
-        c1.markdown(f"**사진 태그:** `{p_tag}`")
-        with c2:
-          render_copy_button(p_tag, "태그 복사")
-
-      opt1 = sec.get("option_1", "")
-      if opt1:
-        c1, c2 = st.columns([5, 1])
-        c1.markdown(f"**옵션 1 (설명형):**\n\n{opt1}")
-        with c2:
-          render_copy_button(opt1, "1번 본문 복사")
-
-      opt2 = sec.get("option_2", "")
-      if opt2:
-        c1, c2 = st.columns([5, 1])
-        c1.markdown(f"**옵션 2 (감성/반응형):**\n\n{opt2}")
-        with c2:
-          render_copy_button(opt2, "2번 본문 복사")
-      st.divider()
-
-  # 5. 하단 총평 표
-  with st.expander("📊 하단 총평 표 & 솔직 후기 마무리", expanded=True):
-    r_table = data.get("review_table_data", [])
-    if r_table:
-      for r in r_table:
-        st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
-      render_copy_button(
-          "",
-          button_label="📊 총평 표 복사 (스마트에디터 표 자동 변환)",
-          is_table=True,
-          table_data=r_table,
-      )
-
-    closing = data.get("closing_remarks", "")
-    if closing:
-      c1, c2 = st.columns([5, 1])
-      c1.markdown(f"**[마무리 소감]**\n\n{closing}")
-      with c2:
-        render_copy_button(closing, "소감 복사")
-
-  # 6. 네이버 태그
-  with st.expander("🏷️ 네이버 스마트에디터 등록용 태그", expanded=True):
-    tags = data.get("naver_tags", [])
-    if tags:
-      comma_tags = ", ".join([t.replace("#", "").strip() for t in tags])
-      c1, c2 = st.columns([5, 1])
-      c1.code(comma_tags)
-      with c2:
-        render_copy_button(comma_tags, "태그 전체 복사 (쉼표 구분)")
+    # 6. 네이버 태그
+    with st.expander("🏷️ 네이버 스마트에디터 등록용 태그", expanded=True):
+        tags = data.get("naver_tags", [])
+        if tags:
+            comma_tags = ", ".join([t.replace("#", "").strip() for t in tags])
+            st.code(comma_tags)
+            render_copy_button(comma_tags, "태그 전체 복사 (쉼표 구분)")
