@@ -22,6 +22,7 @@ st.set_page_config(
 )
 
 MY_PASSWORD = "1234"
+BACKUP_FILE_PATH = "last_blog_result.json"
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -38,13 +39,13 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# [설정 및 신규 무료 API 키]
+# [설정 및 신규 API 키]
 # ==========================================
 GEMINI_API_KEY = "AQ.Ab8RN6Kl5WbrGnOp2GKXYJmZroPMzk157fLR3Z8FrbcOlehR3Q"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# [세션 상태 관리: 사진 보관함]
+# [세션 상태 관리: 사진 보관함 & 결과 데이터]
 # ==========================================
 if "cur_body_images" not in st.session_state:
     st.session_state["cur_body_images"] = []
@@ -55,6 +56,9 @@ if "cur_info_images" not in st.session_state:
     st.session_state["cur_info_images"] = []
 if "last_info_sig" not in st.session_state:
     st.session_state["last_info_sig"] = ""
+
+if "result_data" not in st.session_state:
+    st.session_state["result_data"] = None
 
 
 # ==========================================
@@ -117,7 +121,20 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("ZIP 자연 정렬 & 순서 고정 지원 | 무료 티어 가동")
+st.caption("초경량 500px 최적화 | 최근 글 1초 복구 기능 탑재")
+
+# 백업 파일 존재 시 복구 안내 바
+if os.path.exists(BACKUP_FILE_PATH):
+    rec_col1, rec_col2 = st.columns([3, 1])
+    rec_col1.info("💡 앱 전환이나 새로고침으로 글이 사라졌다면 오른쪽 복구 버튼을 누르세요!")
+    if rec_col2.button("🔄 최근 생성 글 복구", use_container_width=True):
+        try:
+            with open(BACKUP_FILE_PATH, "r", encoding="utf-8") as f:
+                st.session_state["result_data"] = json.load(f)
+            st.success("이전 생성 글을 성공적으로 복구했습니다!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"복구 실패: {e}")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -361,16 +378,20 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                     raw = raw[:-3]
                 data = json.loads(raw.strip())
                 st.session_state["result_data"] = data
+                
+                # 파일로 자동 로컬 백업 저장 (리셋 방어용)
+                with open(BACKUP_FILE_PATH, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 st.error(f"결과 데이터 파싱 오류: {e}")
 
 # ==========================================
 # [결과 출력 리스트 렌더링 - 1:1 사진 카드 구조]
 # ==========================================
-if "result_data" in st.session_state:
+if st.session_state["result_data"]:
     data = st.session_state["result_data"]
     
-    st.success("🎉 작성이 완료되었습니다! 각 카드의 복사 버튼을 눌러 스마트에디터에 바로 붙여넣으세요.")
+    st.success("🎉 글 작성이 완료되었습니다! 각 카드의 복사 버튼을 눌러 스마트에디터에 바로 붙여넣으세요.")
     
     with st.expander("📌 네이버 추천 제목 (선택 복사)", expanded=True):
         for i, t in enumerate(data.get("titles", []), start=1):
