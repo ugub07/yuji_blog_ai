@@ -1,7 +1,7 @@
 import io
 import json
 import os
-import re
+import base64
 import warnings
 import streamlit as st
 from PIL import Image
@@ -40,24 +40,6 @@ if not st.session_state["authenticated"]:
 # ==========================================
 GEMINI_API_KEY = "AQ.Ab8RN6L0BRlxvtCiCV8AAE6HPgjsuqLn6UWIcQXN0_7So3THuA"
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-
-# ==========================================
-# [초경량 이미지 압축 헬퍼]
-# ==========================================
-def process_mobile_image(file_obj, max_dim=1024):
-    try:
-        img = Image.open(file_obj)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=80, optimize=True)
-        buffer.seek(0)
-        return Image.open(buffer)
-    except Exception:
-        return None
 
 
 # ==========================================
@@ -112,7 +94,7 @@ def render_copy_button(text_to_copy, button_label="📋 복사", is_table=False,
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("모바일 다중 업로드 완벽 최적화 | C-Rank & D.I.A+ 알고리즘")
+st.caption("모바일 사진 다중 선택 완벽 보정판 | C-Rank & D.I.A+")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -121,32 +103,50 @@ extra_notes = st.text_area("상세 메모 및 솔직 후기 팁", placeholder="�
 
 st.write("---")
 
-# 모바일 다중 선택을 위해 MIME 타입을 이미지 전체(image/*)로 지정
+# 1. 정보 사진 업로더 (카메라/파일 다중 선택)
+st.markdown("#### 📌 메뉴판 / 스펙 / 정보 사진 (선택)")
 info_files = st.file_uploader(
-    "📌 메뉴판 / 스펙 / 정보 사진 (선택 사항)", 
-    type=["jpg", "jpeg", "png", "webp", "heic"],
+    "정보 사진 선택", 
     accept_multiple_files=True,
-    help="여러 장을 한 번에 선택할 수 있습니다."
+    key="info_up"
 )
 
+# 2. 본문 사진 업로더 (카메라/파일 다중 선택)
+st.markdown("#### 📷 본문 사진 (필수: 갤러리에서 여러 장 체크)")
 body_files = st.file_uploader(
-    "📷 본문 사진 (필수: 갤러리에서 여러 장 묶음 선택)", 
-    type=["jpg", "jpeg", "png", "webp", "heic"],
+    "본문 사진 선택 (여러 장 묶음 선택 가능)", 
     accept_multiple_files=True,
-    help="갤러리에서 여러 장을 길게 눌러 한 번에 선택해 주세요."
+    key="body_up"
 )
 
+# 파일이 들어오면 화면에 바로 카운트와 썸네일 보여주기
+parsed_body_images = []
 if body_files:
-    st.success(f"🎉 총 {len(body_files)}장의 본문 사진이 한 번에 등록되었습니다!")
-    # 미리보기 썸네일
-    preview_cols = st.columns(min(len(body_files), 5))
-    for idx, f in enumerate(body_files[:5]):
+    st.success(f"🎉 총 {len(body_files)}장의 사진이 성공적으로 업로드되었습니다!")
+    preview_cols = st.columns(min(len(body_files), 4))
+    for idx, f in enumerate(body_files):
         try:
-            preview_cols[idx % 5].image(f, caption=f"사진 {idx+1}", use_container_width=True)
+            img = Image.open(f)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            parsed_body_images.append(img)
+            if idx < 4:
+                preview_cols[idx % 4].image(img, caption=f"사진 {idx+1}", use_container_width=True)
         except Exception:
             pass
-    if len(body_files) > 5:
-        st.caption(f"외 {len(body_files)-5}장의 사진이 더 포함되어 있습니다.")
+
+parsed_info_images = []
+if info_files:
+    for f in info_files:
+        try:
+            img = Image.open(f)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            parsed_info_images.append(img)
+        except Exception:
+            pass
 
 st.write("---")
 
@@ -155,24 +155,11 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.warning("명칭과 필수 키워드를 입력해 주세요!")
         st.stop()
         
-    if not body_files:
+    if not parsed_body_images:
         st.warning("본문 사진을 최소 1장 이상 등록해 주세요!")
         st.stop()
 
-    with st.spinner("⚡ 고화질 사진 압축 및 네이버 맞춤 초안 작성 중... (약 15~25초 소요)"):
-        pasted_images = []
-        for f in body_files:
-            compressed = process_mobile_image(f)
-            if compressed:
-                pasted_images.append(compressed)
-                
-        info_images = []
-        if info_files:
-            for f in info_files:
-                compressed = process_mobile_image(f)
-                if compressed:
-                    info_images.append(compressed)
-
+    with st.spinner("⚡ 사진 분석 및 네이버 맞춤 초안 작성 중... (약 15~25초 소요)"):
         system_instruction = """
 너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 인기 육아/생활 블로거야.
 네이버 스마트에디터 ONE의 실제 작성 루틴에 맞춰 결과를 JSON으로 응답해.
@@ -227,17 +214,17 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 [필수 핵심 키워드]: {target_keyword}
 [상세 메모 및 솔직 후기 팁]: {extra_notes if extra_notes else "사진 디테일을 보고 솔직하고 구체적인 경험담 위주로 작성해줘"}
 
-등록된 정보/스펙 사진 {len(info_images)}장과 본문 사진 {len(pasted_images)}장을 분석해서 포스팅을 작성해줘.
-본문 사진 2번부터 {len(pasted_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
+등록된 정보 사진 {len(parsed_info_images)}장과 본문 사진 {len(parsed_body_images)}장을 분석해서 포스팅을 작성해줘.
+본문 사진 2번부터 {len(parsed_body_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
 순수 JSON 형식으로만 응답해줘.
 """
 
         payload = [prompt_text]
-        if info_images:
+        if parsed_info_images:
             payload.append("\n[메뉴판/정보 사진]:\n")
-            payload.extend(info_images)
+            payload.extend(parsed_info_images)
         payload.append("\n[본문 포스팅 사진]:\n")
-        payload.extend(pasted_images)
+        payload.extend(parsed_body_images)
 
         try:
             res = client.models.generate_content(
