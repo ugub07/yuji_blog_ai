@@ -5,6 +5,7 @@ import re
 import warnings
 import google.genai as genai
 from PIL import Image
+import requests
 import streamlit as st
 
 # 경고창 숨김
@@ -18,7 +19,7 @@ st.set_page_config(
     page_title="블로그 맞춤 초안 생성기", page_icon="✍️", layout="wide"
 )
 
-MY_PASSWORD = "1234"  # 👈 여기서 원하는 비밀번호로 바꿔줘!
+MY_PASSWORD = "1234"
 
 if "authenticated" not in st.session_state:
   st.session_state["authenticated"] = False
@@ -47,14 +48,15 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 def render_copy_button(
     text_to_copy, button_label="📋 복사", is_table=False, table_data=None
 ):
-  """웹 브라우저 환경에서 원클릭으로 텍스트 및 네이버 표를 클립보드에 넣는 자바스크립트 헬퍼"""
   if is_table and table_data:
-    # 네이버 스마트에디터 친화 탭 구분 텍스트(TSV) 생성
     tsv_lines = [
         f"{row.get('항목', '')}\t{row.get('내용', '')}" for row in table_data
     ]
     tsv_content = (
-        "\\n".join(tsv_lines).replace('"', '\\"').replace("'", "\\'")
+        "\\n".join(tsv_lines)
+        .replace('"', '\\"')
+        .replace("'", "\\'")
+        .replace("\r", "")
     )
     js_code = f"""
         <button onclick="navigator.clipboard.writeText('{tsv_content}').then(() => alert('표가 복사되었습니다! 네이버 에디터에 Ctrl+V 하세요.'));" 
@@ -63,11 +65,11 @@ def render_copy_button(
         </button>
         """
   else:
-    # 순수 텍스트 정제
     clean_txt = (
         text_to_copy.replace("#", "")
         .replace("'", "\\'")
         .replace('"', '\\"')
+        .replace("\r", "")
         .replace("\n", "\\n")
     )
     js_code = f"""
@@ -91,8 +93,12 @@ with col1:
   category = st.selectbox(
       "카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"]
   )
-  item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
-  target_keyword = st.text_input("필수 키워드 (쉼표 구분)", placeholder="예: 다이소스티커, 스티커북, 두돌아기놀이책")
+  item_name = st.text_input(
+      "장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북"
+  )
+  target_keyword = st.text_input(
+      "필수 키워드 (쉼표 구분)", placeholder="예: 다이소스티커, 스티커북, 두돌아기놀이책"
+  )
   extra_notes = st.text_area(
       "상세 메모 및 솔직 후기 팁",
       placeholder="솔직한 장단점, 실제 놀아준 팁 등을 적어주세요.",
@@ -113,7 +119,9 @@ with col2:
 
 st.divider()
 
-if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
+if st.button(
+    "✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True
+):
   if not item_name or not target_keyword:
     st.warning("명칭과 필수 키워드를 입력해 주세요!")
     st.stop()
@@ -123,68 +131,81 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
     st.stop()
 
   with st.spinner("⚡ 네이버 최적화 초안 작성 중... (약 15~25초 소요)"):
-    # 이미지 파싱
     pasted_images = [Image.open(f) for f in body_files]
     info_images = [Image.open(f) for f in info_files] if info_files else []
 
     system_instruction = """
-        너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 파워 육아/생활 블로거야.
-        실제 네이버 스마트에디터 작성 루틴에 맞춰 JSON으로 응답해.
+너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 인기 육아/생활 블로거야.
+네이버 스마트에디터 ONE의 실제 작성 루틴(메인 썸네일 -> 도입 설명 -> Q&A 인용구 -> Q&A 연결 본문 -> 상단 요약 표 -> 소제목 & 본문 반복 -> 하단 총평 표 -> 태그)에 맞춰 결과를 JSON으로 응답해.
 
-        [문체 및 작성 원칙 - 절대 금지 및 변형 규칙]
-        1. [절대 금지 어휘]: '제격이에요', '쏙쏙 골라', '시선을 사로잡는', '고사리손', '이해가 쏙쏙 돼요', '취향 저격', '꿀템', '대박', '침 꼴깍 삼키며', '큰 축복 같아요', '다채로운', '소장 가치', '~했답니다', '~느낌이었답니다'
-        2. [문미 변형 규칙]: '눈을 떼지 못해요' -> '눈을 떼지 못하더라구요'로 서술. 담백한 문미('~했어요', '~하더라구요', '~하기 수월해요') 위주 사용.
-        3. [태그 # 제거]: '#' 기호 절대 금지. 순수 단어로만 작성.
-        4. [표 규격]: [{"항목": "...", "내용": "..."}] JSON 리스트로 응답. 총평 표는 빈약하지 않게 각 항목당 2~3줄 이상 풍성하게 작성.
+============================================================
+[문체 및 작성 원칙 - 절대 금지 및 변형 규칙]
+============================================================
+1. [절대 금지 어휘]: 
+   - '제격이에요', '쏙쏙 골라', '시선을 사로잡는', '고사리손', '이해가 쏙쏙 돼요'
+   - '취향 저격', '꿀템', '대박', '침 꼴깍 삼키며', '큰 축복 같아요', '다채로운', '소장 가치', '~했답니다', '~느낌이었답니다'
+   - 위 단어들은 절대 사용하지 말 것.
 
-        반드시 아래 JSON 포맷으로만 응답할 것:
-        {
-          "titles": ["1안 제목", "2안 제목", "3안 제목"],
-          "main_image_tags": "대표사진 하단 태그 단어 3~4개 (# 없이 공백 구분)",
-          "intro_description": "메인 썸네일 아래 들어갈 2~3줄의 방문/구매/시작 계기와 첫인상",
-          "qna_questions": [
-            "질문 1",
-            "질문 2",
-            "질문 3"
-          ],
-          "intro_bridge": "저도 들이기(구매하기) 전에 가장 궁금했던 부분들인데, 직접 경험해보고 느낀 점들을 솔직하게 공유해 드릴게요!",
-          "summary_table_data": [
-            {"항목": "상호/제품명", "내용": "구체적인 이름"},
-            {"항목": "종류/구성", "내용": "상세 구성 내용"},
-            {"항목": "권장연령/규격", "내용": "대상 연령 및 사이즈"},
-            {"항목": "가격/스펙", "내용": "가격 및 주요 스펙"},
-            {"항목": "구매처/팁", "내용": "구매처 및 팁"}
-          ],
-          "body_sections": [
-            {
-              "photo_index": 2,
-              "subheading": "스마트에디터용 소제목 (필요 시 작성, 없으면 빈 문자열)",
-              "tags": "사진 하단 태그 2~3단어 (# 제외)",
-              "option_1": "1번 스타일 본문 설명 (담백하고 직관적인 사실 설명 2~3줄)",
-              "option_2": "2번 스타일 본문 설명 (실제 아이 반응이나 디테일 2~3줄)"
-            }
-          ],
-          "review_table_data": [
-            {"항목": "장점", "내용": "솔직한 장점 2~3줄"},
-            {"항목": "아쉬운 점", "내용": "솔직한 아쉬운 점 2~3줄"},
-            {"항목": "구매/방문 꿀팁", "내용": "알아두면 유용한 팁 2~3줄"},
-            {"항목": "추천 대상", "내용": "어떤 분들에게 잘 맞는지 2~3줄"}
-          ],
-          "closing_remarks": "마무리 총평 및 소감 2줄",
-          "naver_tags": ["태그1", "태그2", "태그3", "태그4", "태그5", "태그6", "태그7", "태그8", "태그9", "태그10"]
-        }
-        """
+2. [문미 및 어조 변형 규칙]:
+   - '눈을 떼지 못해요' 같은 표현 대신 반드시 '눈을 떼지 못하더라구요' 로 서술할 것.
+   - 담백하고 자연스러운 문미 종결: '~했어요', '~하더라구요', '~하기 수월해요' 위주로 서술.
+   - 본문 내 불필요한 번호 매기기(1., 2.)나 마크다운 기호(*, >, #)를 일절 넣지 말 것.
+
+3. [태그 기호 # 원천 제거]:
+   - '사진 하단 태그'나 '네이버 태그'에 절대 '#' 기호를 붙이지 말 것. 순수 단어로만 작성.
+
+4. [상단 요약 표 및 하단 총평 표 규격]:
+   - 반드시 [{"항목": "...", "내용": "..."}] 형태의 JSON 리스트로 응답할 것.
+   - 하단 총평 표는 대충 짧게 쓰지 말고, [장점, 아쉬운 점, 구매/방문 꿀팁, 추천 대상] 각각 2~3문장 이상 구체적이고 풍성하게 기술할 것.
+
+5. [반드시 아래 JSON 포맷으로만 응답]:
+{
+  "titles": ["1안 제목", "2안 제목", "3안 제목"],
+  "main_image_tags": "대표사진 하단 태그 단어 3~4개 (# 없이 띄어쓰기 구분)",
+  "intro_description": "메인 썸네일 아래 들어갈 2~3줄의 방문/구매/시작 계기와 첫인상",
+  "qna_questions": [
+    "질문 1",
+    "질문 2",
+    "질문 3"
+  ],
+  "intro_bridge": "저도 접해보기 전에 가장 궁금했던 부분들인데, 직접 경험해보고 느낀 점들을 솔직하게 공유해 드릴게요!",
+  "summary_table_data": [
+    {"항목": "상호/제품명", "내용": "구체적인 이름"},
+    {"항목": "종류/구성", "내용": "상세 구성 내용"},
+    {"항목": "권장연령/규격", "내용": "대상 연령 및 사이즈"},
+    {"항목": "가격/스펙", "내용": "가격 및 주요 스펙"},
+    {"항목": "구매처/팁", "내용": "구매처 및 팁"}
+  ],
+  "body_sections": [
+    {
+      "photo_index": 2,
+      "subheading": "스마트에디터용 소제목 (필요한 경우에만 작성, 없으면 빈 문자열)",
+      "tags": "사진 하단 태그 2~3단어 (# 제외)",
+      "option_1": "1번 스타일 본문 설명 (담백하고 직관적인 사실 설명 2~3줄)",
+      "option_2": "2번 스타일 본문 설명 (실제 아이 반응이나 디테일 2~3줄)"
+    }
+  ],
+  "review_table_data": [
+    {"항목": "장점", "내용": "솔직한 장점 2~3줄"},
+    {"항목": "아쉬운 점", "내용": "솔직한 아쉬운 점 2~3줄"},
+    {"항목": "구매/방문 꿀팁", "내용": "알아두면 유용한 팁 2~3줄"},
+    {"항목": "추천 대상", "내용": "어떤 분들에게 잘 맞는지 2~3줄"}
+  ],
+  "closing_remarks": "마무리 총평 및 소감 2줄",
+  "naver_tags": ["태그1", "태그2", "태그3", "태그4", "태그5", "태그6", "태그7", "태그8", "태그9", "태그10"]
+}
+"""
 
     prompt_text = f"""
-        [카테고리]: {category}
-        [장소/상호/교구/제품명]: {item_name}
-        [필수 핵심 키워드]: {target_keyword}
-        [상세 메모 및 솔직 후기 팁]: {extra_notes if extra_notes else "사진 디테일을 보고 솔직하고 구체적인 경험담 위주로 작성해줘"}
+[카테고리]: {category}
+[장소/상호/교구/제품명]: {item_name}
+[필수 핵심 키워드]: {target_keyword}
+[상세 메모 및 솔직 후기 팁]: {extra_notes if extra_notes else "사진 디테일을 보고 솔직하고 구체적인 경험담 위주로 작성해줘"}
 
-        등록된 정보 사진 {len(info_images)}장과 본문 사진 {len(pasted_images)}장을 분석해서 포스팅을 작성해줘.
-        본문 사진 2번부터 {len(pasted_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
-        JSON 포맷으로만 응답해줘.
-        """
+등록된 정보/스펙 사진 {len(info_images)}장과 본문 사진 {len(pasted_images)}장을 분석해서 포스팅을 작성해줘.
+본문 사진 2번부터 {len(pasted_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
+순수 JSON 형식으로만 응답해줘.
+"""
 
     payload = [prompt_text]
     if info_images:
