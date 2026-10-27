@@ -94,7 +94,7 @@ def render_copy_button(text_to_copy, button_label="📋 복사", is_table=False,
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("모바일 사진 다중 선택 완벽 보정판 | C-Rank & D.I.A+")
+st.caption("모바일 사진 다중 선택 완벽 지원 | C-Rank & D.I.A+")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -103,48 +103,63 @@ extra_notes = st.text_area("상세 메모 및 솔직 후기 팁", placeholder="�
 
 st.write("---")
 
-# 1. 정보 사진 업로더 (카메라/파일 다중 선택)
+# 1. 정보 사진 등록
 st.markdown("#### 📌 메뉴판 / 스펙 / 정보 사진 (선택)")
 info_files = st.file_uploader(
     "정보 사진 선택", 
     accept_multiple_files=True,
-    key="info_up"
+    key="uploader_info"
 )
 
-# 2. 본문 사진 업로더 (카메라/파일 다중 선택)
+# 2. 본문 사진 등록
 st.markdown("#### 📷 본문 사진 (필수: 갤러리에서 여러 장 체크)")
 body_files = st.file_uploader(
-    "본문 사진 선택 (여러 장 묶음 선택 가능)", 
+    "본문 사진 선택", 
     accept_multiple_files=True,
-    key="body_up"
+    key="uploader_body"
 )
 
-# 파일이 들어오면 화면에 바로 카운트와 썸네일 보여주기
+# 파일 처리 및 미리보기
 parsed_body_images = []
 if body_files:
-    st.success(f"🎉 총 {len(body_files)}장의 사진이 성공적으로 업로드되었습니다!")
+    valid_count = 0
     preview_cols = st.columns(min(len(body_files), 4))
     for idx, f in enumerate(body_files):
         try:
+            # 파일 포인터 초기화
+            f.seek(0)
             img = Image.open(f)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-            parsed_body_images.append(img)
+            
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            buf.seek(0)
+            ready_img = Image.open(buf)
+            
+            parsed_body_images.append(ready_img)
+            valid_count += 1
             if idx < 4:
-                preview_cols[idx % 4].image(img, caption=f"사진 {idx+1}", use_container_width=True)
+                preview_cols[idx % 4].image(ready_img, caption=f"사진 {idx+1}", use_container_width=True)
         except Exception:
             pass
+    if valid_count > 0:
+        st.success(f"🎉 총 {valid_count}장의 본문 사진이 정상 등록되었습니다!")
 
 parsed_info_images = []
 if info_files:
     for f in info_files:
         try:
+            f.seek(0)
             img = Image.open(f)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-            parsed_info_images.append(img)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            buf.seek(0)
+            parsed_info_images.append(Image.open(buf))
         except Exception:
             pass
 
