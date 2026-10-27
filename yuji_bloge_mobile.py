@@ -48,17 +48,14 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # [서버 튕김 방지: 초경량 이미지 압축 헬퍼]
 # ==========================================
 def process_mobile_image(file_obj, max_dim=1024):
-    """모바일 원본 대용량 사진을 초경량화하여 서버 메모리 폭주 원천 차단"""
+    """모바일 원본 대용량 사진을 가볍게 리사이징하여 서버 메모리 폭주 원천 차단"""
     try:
         img = Image.open(file_obj)
-        # 투명 배경 RGBA -> RGB 변환
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         
-        # 가로/세로 최대 1024px로 리사이징
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
         
-        # JPEG 압축
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=80, optimize=True)
         buffer.seek(0)
@@ -130,14 +127,14 @@ st.write("---")
 
 info_files = st.file_uploader(
     "📌 메뉴판 / 스펙 / 정보 사진 (선택 사항)", 
-    type=["png", "jpg", "jpeg", "webp"], 
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key="uploader_info"
 )
 
 body_files = st.file_uploader(
     "📷 본문 사진 (필수: 갤러리에서 여러 장 선택 가능)", 
-    type=["png", "jpg", "jpeg", "webp"], 
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key="uploader_body"
 )
 
 if body_files:
@@ -155,7 +152,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.stop()
 
     with st.spinner("⚡ 사진 최적화 및 네이버 맞춤 초안 작성 중... (약 15~25초 소요)"):
-        # 1. 사진 경량화 압축 진행 (메모리 튕김 방지)
+        # 사진 경량화 압축 (메모리 튕김 차단)
         pasted_images = []
         for f in body_files:
             compressed = process_mobile_image(f)
