@@ -2,6 +2,7 @@ import io
 import json
 import os
 import zipfile
+import time
 import warnings
 import streamlit as st
 from PIL import Image
@@ -121,7 +122,7 @@ def process_image_file(file_bytes):
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("ZIP 일괄 압축 업로드 & 사진 순서 자유 배치 | 무료 티어 가동")
+st.caption("ZIP 일괄 압축 지원 & 자유로운 순서 조정 | 무료 티어 가동")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -170,7 +171,7 @@ st.write("---")
 
 # 2. 본문 사진 등록 (ZIP 또는 개별 선택)
 st.markdown("#### 📷 본문 사진 (필수)")
-st.info("💡 **갤러리에서 여러 장을 ZIP으로 압축**해서 올리면 한 번에 쏙 들어옵니다! 아래 버튼으로 사진 순서를 자유롭게 바꿀 수 있어요.")
+st.info("💡 **갤러리에서 여러 장을 ZIP으로 압축**해서 올리면 한 번에 쏙 들어옵니다!")
 
 body_files = st.file_uploader(
     "본문 사진 선택 (사진 개별 선택 또는 ZIP 압축 파일)", 
@@ -179,7 +180,6 @@ body_files = st.file_uploader(
     key="uploader_body"
 )
 
-# 업로더 새 파일 감지 시 세션 리스트에 동기화
 if body_files:
     upload_sig = "".join([f.name + str(f.size) for f in body_files])
     if st.session_state["last_body_uploader_id"] != upload_sig:
@@ -204,29 +204,44 @@ if body_files:
                     loaded_imgs.append(im)
         st.session_state["cur_body_images"] = loaded_imgs
 
-# 본문 사진 순서 조정 및 미리보기 영역
+# 본문 사진 순서 조정 및 미리보기 영역 (맨앞/앞/뒤/맨뒤/삭제)
 if st.session_state["cur_body_images"]:
     img_list = st.session_state["cur_body_images"]
-    st.success(f"🎉 총 {len(img_list)}장의 사진이 등록되었습니다. 순서를 확인하고 조정해 주세요!")
+    st.success(f"🎉 총 {len(img_list)}장의 사진이 등록되었습니다. 순서를 맞추고 아래 생성을 눌러주세요!")
     
-    # 3개 컬럼씩 사진과 위치 이동 버튼 표시
-    for i in range(0, len(img_list), 3):
-        cols = st.columns(3)
-        for j in range(3):
+    for i in range(0, len(img_list), 2):
+        cols = st.columns(2)
+        for j in range(2):
             idx = i + j
             if idx < len(img_list):
                 with cols[j]:
-                    st.image(img_list[idx], caption=f"사진 {idx+1}{' (대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
-                    btn_c1, btn_c2, btn_c3 = st.columns([1, 1, 1])
+                    st.image(img_list[idx], caption=f"사진 {idx+1}{' (⭐ 대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
+                    
+                    b_cols = st.columns(5)
+                    # 맨앞으로
                     if idx > 0:
-                        if btn_c1.button("⬅️ 앞으로", key=f"up_{idx}"):
+                        if b_cols[0].button("⏮️맨앞", key=f"first_{idx}", help="1번 대표 사진으로 이동"):
+                            item = img_list.pop(idx)
+                            img_list.insert(0, item)
+                            st.rerun()
+                    # 한칸 앞으로
+                    if idx > 0:
+                        if b_cols[1].button("⬅️앞", key=f"up_{idx}"):
                             img_list[idx - 1], img_list[idx] = img_list[idx], img_list[idx - 1]
                             st.rerun()
+                    # 한칸 뒤로
                     if idx < len(img_list) - 1:
-                        if btn_c2.button("➡️ 뒤로", key=f"down_{idx}"):
+                        if b_cols[2].button("➡️뒤", key=f"down_{idx}"):
                             img_list[idx + 1], img_list[idx] = img_list[idx], img_list[idx + 1]
                             st.rerun()
-                    if btn_c3.button("❌ 삭제", key=f"del_{idx}"):
+                    # 맨뒤로
+                    if idx < len(img_list) - 1:
+                        if b_cols[3].button("⏭️맨뒤", key=f"last_{idx}", help="마지막 사진으로 이동"):
+                            item = img_list.pop(idx)
+                            img_list.append(item)
+                            st.rerun()
+                    # 삭제
+                    if b_cols[4].button("❌", key=f"del_{idx}", help="이 사진 삭제"):
                         img_list.pop(idx)
                         st.rerun()
         st.write("")
@@ -234,7 +249,7 @@ if st.session_state["cur_body_images"]:
 st.write("---")
 
 # ==========================================
-# [생성 버튼 및 안전 1회 호출]
+# [생성 버튼 및 503 자동 복구 안전 호출]
 # ==========================================
 if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
     if not item_name or not target_keyword:
@@ -245,7 +260,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.warning("본문 사진을 최소 1장 이상 등록해 주세요.")
         st.stop()
 
-    with st.spinner("⚡ 사진 분석 및 초안 생성 중... (1회성 안전 호출)"):
+    with st.spinner("⚡ AI 서버에 요청 중입니다... (503 지연 시 자동 재시도)"):
         pasted_images = st.session_state["cur_body_images"]
         info_images = st.session_state["cur_info_images"]
 
@@ -315,24 +330,39 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         payload.append("\n[본문 포스팅 사진]:\n")
         payload.extend(pasted_images)
 
-        try:
-            res = client.models.generate_content(
-                model='gemini-3.8-flash',
-                contents=payload,
-                config=dict(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json"
+        # 503 에러 발생 시 최대 2회 대기 후 재시도하는 안전 로직
+        res = None
+        for attempt in range(2):
+            try:
+                res = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=payload,
+                    config=dict(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json"
+                    )
                 )
-            )
-            raw = res.text.strip()
-            if raw.startswith("```json"):
-                raw = raw[7:]
-            if raw.endswith("```"):
-                raw = raw[:-3]
-            data = json.loads(raw.strip())
-            st.session_state["result_data"] = data
-        except Exception as e:
-            st.error(f"오류가 발생했습니다: {e}")
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str and attempt == 0:
+                    time.sleep(3)
+                    continue
+                else:
+                    st.error(f"오류가 발생했습니다: {e}")
+                    break
+
+        if res and res.text:
+            try:
+                raw = res.text.strip()
+                if raw.startswith("```json"):
+                    raw = raw[7:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                data = json.loads(raw.strip())
+                st.session_state["result_data"] = data
+            except Exception as e:
+                st.error(f"결과 데이터 파싱 오류: {e}")
 
 # ==========================================
 # [결과 출력 리스트 렌더링]
