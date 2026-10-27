@@ -117,7 +117,7 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("ZIP 자연 정렬 & 순서 고정 완벽 지원 | C-Rank & D.I.A+ 최적화")
+st.caption("ZIP 자연 정렬 & 순서 고정 지원 | 무료 티어 가동")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -177,7 +177,6 @@ body_files = st.file_uploader(
     key="uploader_body"
 )
 
-# 파일이 새로 바뀌었을 때만 파싱 (순서 변경 시 덮어쓰기 방지!)
 if body_files:
     body_sig = "".join([f.name + str(f.size) for f in body_files])
     if st.session_state["last_body_sig"] != body_sig:
@@ -205,7 +204,7 @@ if body_files:
                         new_loaded.append(im)
             st.session_state["cur_body_images"] = new_loaded
 
-# 본문 사진 순서 조정 및 미리보기 영역 (맨앞/앞/뒤/맨뒤/삭제)
+# 본문 사진 순서 조정 및 미리보기 영역
 if st.session_state["cur_body_images"]:
     img_list = st.session_state["cur_body_images"]
     
@@ -225,29 +224,24 @@ if st.session_state["cur_body_images"]:
                     st.image(img_list[idx], caption=f"사진 {idx+1}{' (⭐ 대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
                     
                     b_cols = st.columns(5)
-                    # 맨앞으로
                     if idx > 0:
                         if b_cols[0].button("⏮️맨앞", key=f"first_{idx}", help="1번 대표 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.insert(0, item)
                             st.rerun()
-                    # 한칸 앞으로
                     if idx > 0:
                         if b_cols[1].button("⬅️앞", key=f"up_{idx}"):
                             img_list[idx - 1], img_list[idx] = img_list[idx], img_list[idx - 1]
                             st.rerun()
-                    # 한칸 뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[2].button("➡️뒤", key=f"down_{idx}"):
                             img_list[idx + 1], img_list[idx] = img_list[idx], img_list[idx + 1]
                             st.rerun()
-                    # 맨뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[3].button("⏭️맨뒤", key=f"last_{idx}", help="마지막 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.append(item)
                             st.rerun()
-                    # 삭제
                     if b_cols[4].button("❌", key=f"del_{idx}", help="이 사진 삭제"):
                         img_list.pop(idx)
                         st.rerun()
@@ -341,7 +335,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         for attempt in range(2):
             try:
                 res = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.8-flash',
                     contents=payload,
                     config=dict(
                         system_instruction=system_instruction,
