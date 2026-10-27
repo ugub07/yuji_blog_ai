@@ -195,7 +195,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 
     try:
       res = client.models.generate_content(
-          model="gemini-2.5-flash",
+          model="gemini-3.8-flash",
           contents=payload,
           config=dict(
               system_instruction=system_instruction,
