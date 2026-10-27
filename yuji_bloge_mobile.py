@@ -1,7 +1,7 @@
 import io
 import json
 import os
-import base64
+import zipfile
 import warnings
 import streamlit as st
 from PIL import Image
@@ -36,10 +36,23 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# [설정 및 API 키]
+# [설정 및 신규 무료 API 키]
 # ==========================================
-GEMINI_API_KEY = "AQ.Ab8RN6L0BRlxvtCiCV8AAE6HPgjsuqLn6UWIcQXN0_7So3THuA"
+GEMINI_API_KEY = "AQ.Ab8RN6Kl5WbrGnOp2GKXYJmZroPMzk157fLR3Z8FrbcOlehR3Q"
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ==========================================
+# [세션 상태 관리: 사진 목록 보관함]
+# ==========================================
+if "cur_body_images" not in st.session_state:
+    st.session_state["cur_body_images"] = []
+if "last_body_uploader_id" not in st.session_state:
+    st.session_state["last_body_uploader_id"] = None
+
+if "cur_info_images" not in st.session_state:
+    st.session_state["cur_info_images"] = []
+if "last_info_uploader_id" not in st.session_state:
+    st.session_state["last_info_uploader_id"] = None
 
 
 # ==========================================
@@ -90,11 +103,25 @@ def render_copy_button(text_to_copy, button_label="📋 복사", is_table=False,
     st.components.v1.html(js_code, height=52)
 
 
+def process_image_file(file_bytes):
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        buf.seek(0)
+        return Image.open(buf)
+    except Exception:
+        return None
+
+
 # ==========================================
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("모바일 사진 다중 선택 완벽 지원 | C-Rank & D.I.A+")
+st.caption("ZIP 일괄 압축 업로드 & 사진 순서 자유 배치 | 무료 티어 가동")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -106,75 +133,122 @@ st.write("---")
 # 1. 정보 사진 등록
 st.markdown("#### 📌 메뉴판 / 스펙 / 정보 사진 (선택)")
 info_files = st.file_uploader(
-    "정보 사진 선택", 
+    "정보 사진 선택 (또는 ZIP 파일)", 
+    type=["jpg", "jpeg", "png", "webp", "zip"],
     accept_multiple_files=True,
     key="uploader_info"
 )
 
-# 2. 본문 사진 등록
-st.markdown("#### 📷 본문 사진 (필수: 갤러리에서 여러 장 체크)")
+if info_files:
+    upload_sig = "".join([f.name + str(f.size) for f in info_files])
+    if st.session_state["last_info_uploader_id"] != upload_sig:
+        st.session_state["last_info_uploader_id"] = upload_sig
+        new_info = []
+        for f in info_files:
+            f.seek(0)
+            b = f.read()
+            if f.name.lower().endswith(".zip"):
+                try:
+                    with zipfile.ZipFile(io.BytesIO(b)) as z:
+                        for filename in sorted(z.namelist()):
+                            if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                                im = process_image_file(z.read(filename))
+                                if im:
+                                    new_info.append(im)
+                except Exception:
+                    pass
+            else:
+                im = process_image_file(b)
+                if im:
+                    new_info.append(im)
+        st.session_state["cur_info_images"] = new_info
+
+if st.session_state["cur_info_images"]:
+    st.caption(f"등록된 정보 사진: 총 {len(st.session_state['cur_info_images'])}장")
+
+st.write("---")
+
+# 2. 본문 사진 등록 (ZIP 또는 개별 선택)
+st.markdown("#### 📷 본문 사진 (필수)")
+st.info("💡 **갤러리에서 여러 장을 ZIP으로 압축**해서 올리면 한 번에 쏙 들어옵니다! 아래 버튼으로 사진 순서를 자유롭게 바꿀 수 있어요.")
+
 body_files = st.file_uploader(
-    "본문 사진 선택", 
+    "본문 사진 선택 (사진 개별 선택 또는 ZIP 압축 파일)", 
+    type=["jpg", "jpeg", "png", "webp", "zip"],
     accept_multiple_files=True,
     key="uploader_body"
 )
 
-# 파일 처리 및 미리보기
-parsed_body_images = []
+# 업로더 새 파일 감지 시 세션 리스트에 동기화
 if body_files:
-    valid_count = 0
-    preview_cols = st.columns(min(len(body_files), 4))
-    for idx, f in enumerate(body_files):
-        try:
-            # 파일 포인터 초기화
+    upload_sig = "".join([f.name + str(f.size) for f in body_files])
+    if st.session_state["last_body_uploader_id"] != upload_sig:
+        st.session_state["last_body_uploader_id"] = upload_sig
+        loaded_imgs = []
+        for f in body_files:
             f.seek(0)
-            img = Image.open(f)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-            
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            buf.seek(0)
-            ready_img = Image.open(buf)
-            
-            parsed_body_images.append(ready_img)
-            valid_count += 1
-            if idx < 4:
-                preview_cols[idx % 4].image(ready_img, caption=f"사진 {idx+1}", use_container_width=True)
-        except Exception:
-            pass
-    if valid_count > 0:
-        st.success(f"🎉 총 {valid_count}장의 본문 사진이 정상 등록되었습니다!")
+            b = f.read()
+            if f.name.lower().endswith(".zip"):
+                try:
+                    with zipfile.ZipFile(io.BytesIO(b)) as z:
+                        for filename in sorted(z.namelist()):
+                            if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                                im = process_image_file(z.read(filename))
+                                if im:
+                                    loaded_imgs.append(im)
+                except Exception as e:
+                    st.error(f"압축 파일 해제 오류: {e}")
+            else:
+                im = process_image_file(b)
+                if im:
+                    loaded_imgs.append(im)
+        st.session_state["cur_body_images"] = loaded_imgs
 
-parsed_info_images = []
-if info_files:
-    for f in info_files:
-        try:
-            f.seek(0)
-            img = Image.open(f)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            buf.seek(0)
-            parsed_info_images.append(Image.open(buf))
-        except Exception:
-            pass
+# 본문 사진 순서 조정 및 미리보기 영역
+if st.session_state["cur_body_images"]:
+    img_list = st.session_state["cur_body_images"]
+    st.success(f"🎉 총 {len(img_list)}장의 사진이 등록되었습니다. 순서를 확인하고 조정해 주세요!")
+    
+    # 3개 컬럼씩 사진과 위치 이동 버튼 표시
+    for i in range(0, len(img_list), 3):
+        cols = st.columns(3)
+        for j in range(3):
+            idx = i + j
+            if idx < len(img_list):
+                with cols[j]:
+                    st.image(img_list[idx], caption=f"사진 {idx+1}{' (대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
+                    btn_c1, btn_c2, btn_c3 = st.columns([1, 1, 1])
+                    if idx > 0:
+                        if btn_c1.button("⬅️ 앞으로", key=f"up_{idx}"):
+                            img_list[idx - 1], img_list[idx] = img_list[idx], img_list[idx - 1]
+                            st.rerun()
+                    if idx < len(img_list) - 1:
+                        if btn_c2.button("➡️ 뒤로", key=f"down_{idx}"):
+                            img_list[idx + 1], img_list[idx] = img_list[idx], img_list[idx + 1]
+                            st.rerun()
+                    if btn_c3.button("❌ 삭제", key=f"del_{idx}"):
+                        img_list.pop(idx)
+                        st.rerun()
+        st.write("")
 
 st.write("---")
 
+# ==========================================
+# [생성 버튼 및 안전 1회 호출]
+# ==========================================
 if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
     if not item_name or not target_keyword:
-        st.warning("명칭과 필수 키워드를 입력해 주세요!")
+        st.warning("명칭과 필수 키워드를 입력해 주세요.")
         st.stop()
         
-    if not parsed_body_images:
-        st.warning("본문 사진을 최소 1장 이상 등록해 주세요!")
+    if not st.session_state["cur_body_images"]:
+        st.warning("본문 사진을 최소 1장 이상 등록해 주세요.")
         st.stop()
 
-    with st.spinner("⚡ 사진 분석 및 네이버 맞춤 초안 작성 중... (약 15~25초 소요)"):
+    with st.spinner("⚡ 사진 분석 및 초안 생성 중... (1회성 안전 호출)"):
+        pasted_images = st.session_state["cur_body_images"]
+        info_images = st.session_state["cur_info_images"]
+
         system_instruction = """
 너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 인기 육아/생활 블로거야.
 네이버 스마트에디터 ONE의 실제 작성 루틴에 맞춰 결과를 JSON으로 응답해.
@@ -229,17 +303,17 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 [필수 핵심 키워드]: {target_keyword}
 [상세 메모 및 솔직 후기 팁]: {extra_notes if extra_notes else "사진 디테일을 보고 솔직하고 구체적인 경험담 위주로 작성해줘"}
 
-등록된 정보 사진 {len(parsed_info_images)}장과 본문 사진 {len(parsed_body_images)}장을 분석해서 포스팅을 작성해줘.
-본문 사진 2번부터 {len(parsed_body_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
+등록된 정보 사진 {len(info_images)}장과 본문 사진 {len(pasted_images)}장을 분석해서 포스팅을 작성해줘.
+본문 사진 2번부터 {len(pasted_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 작성해줘.
 순수 JSON 형식으로만 응답해줘.
 """
 
         payload = [prompt_text]
-        if parsed_info_images:
+        if info_images:
             payload.append("\n[메뉴판/정보 사진]:\n")
-            payload.extend(parsed_info_images)
+            payload.extend(info_images)
         payload.append("\n[본문 포스팅 사진]:\n")
-        payload.extend(parsed_body_images)
+        payload.extend(pasted_images)
 
         try:
             res = client.models.generate_content(
@@ -258,7 +332,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
             data = json.loads(raw.strip())
             st.session_state["result_data"] = data
         except Exception as e:
-            st.error(f"생성 중 오류가 발생했습니다: {e}")
+            st.error(f"오류가 발생했습니다: {e}")
 
 # ==========================================
 # [결과 출력 리스트 렌더링]
@@ -268,14 +342,12 @@ if "result_data" in st.session_state:
     
     st.success("🎉 작성이 완료되었습니다! 순서대로 복사해서 네이버 블로그에 붙여넣으세요.")
     
-    # 1. 제목 영역
     with st.expander("📌 네이버 추천 제목 (선택 복사)", expanded=True):
         for i, t in enumerate(data.get("titles", []), start=1):
             st.markdown(f"**{i}안:** {t}")
             render_copy_button(t, f"{i}안 제목 복사")
             st.write("")
 
-    # 2. 사진 1 도입부
     with st.expander("📷 사진 1 (대표 썸네일) 아래 구성 요소", expanded=True):
         tag_main = data.get("main_image_tags", "")
         if tag_main:
@@ -298,7 +370,6 @@ if "result_data" in st.session_state:
         st.markdown(f"**[연결 본문글]**\n\n{intro_bridge}")
         render_copy_button(intro_bridge, "연결 본문글 복사")
 
-    # 3. 상단 요약 표
     with st.expander("📊 상단 요약 표 (스마트에디터 표 연동)", expanded=True):
         s_table = data.get("summary_table_data", [])
         if s_table:
@@ -306,7 +377,6 @@ if "result_data" in st.session_state:
                 st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
             render_copy_button("", button_label="📊 요약 표 복사 (스마트에디터 표 자동 변환)", is_table=True, table_data=s_table)
 
-    # 4. 본문 사진별 카드
     with st.expander("✍️ 사진별 소제목 & 본문 내용", expanded=True):
         for sec in data.get("body_sections", []):
             p_idx = sec.get("photo_index", 2)
@@ -333,7 +403,6 @@ if "result_data" in st.session_state:
                 render_copy_button(opt2, "2번 본문 복사")
             st.divider()
 
-    # 5. 하단 총평 표
     with st.expander("📊 하단 총평 표 & 솔직 후기 마무리", expanded=True):
         r_table = data.get("review_table_data", [])
         if r_table:
@@ -347,7 +416,6 @@ if "result_data" in st.session_state:
             st.markdown(f"**[마무리 소감]**\n\n{closing}")
             render_copy_button(closing, "총평 소감 복사")
 
-    # 6. 네이버 태그
     with st.expander("🏷️ 네이버 스마트에디터 등록용 태그", expanded=True):
         tags = data.get("naver_tags", [])
         if tags:
