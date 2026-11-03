@@ -39,7 +39,7 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# [설정 및 신규 유료 API 키 연동]
+# [설정 및 신규 유료 API 키]
 # ==========================================
 GEMINI_API_KEY = "AQ.Ab8RN6L0BRlxvtCiCV8AAE6HPgjsuqLn6UWIcQXN0_7So3THuA"
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -65,7 +65,6 @@ def natural_sort_key(s):
 
 
 def process_to_light_image(file_bytes, max_dim=380):
-    """비용 절약 및 고속 처리를 위한 380px 초경량 JPEG 압축 파이프라인"""
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode in ("RGBA", "P"):
@@ -77,6 +76,50 @@ def process_to_light_image(file_bytes, max_dim=380):
         return Image.open(buf)
     except Exception:
         return None
+
+
+def robust_json_parser(raw_str):
+    """잘린 JSON 문자열(Unterminated string)을 강제로 닫아서 복구하는 파서"""
+    s = raw_str.strip()
+    if s.startswith("```json"):
+        s = s[7:]
+    if s.startswith("```"):
+        s = s[3:]
+    if s.endswith("```"):
+        s = s[:-3]
+    s = s.strip()
+
+    # 1차 시도: 표준 파싱
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+
+    # 2차 시도: 끊긴 문자열 및 괄호 수습
+    fixed = s
+    # 열린 채 끊긴 큰따옴표 닫기
+    quote_count = fixed.count('"') - fixed.count('\\"')
+    if quote_count % 2 != 0:
+        fixed += '"'
+    
+    # 닫히지 않은 리스트 및 딕셔너리 괄호 닫기
+    open_brackets = fixed.count('[') - fixed.count(']')
+    open_braces = fixed.count('{') - fixed.count('}')
+    
+    fixed += ']' * max(0, open_brackets)
+    fixed += '}' * max(0, open_braces)
+
+    try:
+        return json.loads(fixed)
+    except Exception:
+        # 3차 시도: 마지막 쉼표 이후 깨진 부분 잘라내고 닫기
+        last_comma = fixed.rfind(',')
+        if last_comma != -1:
+            chopped = fixed[:last_comma]
+            chopped += ']' * max(0, chopped.count('[') - chopped.count(']'))
+            chopped += '}' * max(0, chopped.count('{') - chopped.count('}'))
+            return json.loads(chopped)
+        raise
 
 
 # ==========================================
@@ -121,7 +164,7 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("초경량 파이프라인 | 과금 방어 단일 호출 | 1회 생성 약 2~3원")
+st.caption("초경량 파이프라인 | JSON 완전 복구 엔진 탑재 | 고속 유료 API 가동")
 
 # 상시 복구 바 영역
 rec_col1, rec_col2 = st.columns([3, 1])
@@ -194,7 +237,6 @@ body_files = st.file_uploader(
     key="uploader_body"
 )
 
-# 파일 업로드 즉각 감지 및 파싱 로직
 if body_files:
     current_token = "|".join([f"{f.name}_{f.size}" for f in body_files])
     if st.session_state["processed_upload_token"] != current_token:
@@ -272,7 +314,7 @@ if st.session_state["cur_body_images"]:
 st.write("---")
 
 # ==========================================
-# [생성 버튼 및 호출 로직 (엄격한 단일 호출)]
+# [생성 버튼 및 호출 로직]
 # ==========================================
 if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
     if not item_name or not target_keyword:
@@ -283,20 +325,20 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.warning("본문 사진을 최소 1장 이상 등록해 주세요.")
         st.stop()
 
-    with st.spinner(f"⚡ 사진 {len(st.session_state['cur_body_images'])}장 분석 및 초안 생성 중... (약 15~20초 소요)"):
+    with st.spinner(f"⚡ 사진 {len(st.session_state['cur_body_images'])}장 분석 및 초안 생성 중..."):
         pasted_images = st.session_state["cur_body_images"]
         info_images = st.session_state["cur_info_images"]
 
         system_instruction = """
 너는 네이버 블로그 스마트블록 및 VIEW 상위 노출(C-Rank & D.I.A+)을 전문으로 하는 인기 육아/생활 블로거야.
-네이버 스마트에디터 ONE의 실제 작성 루틴에 맞춰 결과를 JSON으로 응답해.
+네이버 스마트에디터 ONE의 실제 작성 루틴에 맞춰 결과를 완벽한 JSON으로 응답해.
 
 [문체 및 작성 원칙 - 절대 엄수]
 1. [절대 금지 어휘]: '제격이에요', '쏙쏙 골라', '시선을 사로잡는', '고사리손', '이해가 쏙쏙 돼요', '취향 저격', '꿀템', '대박', '침 꼴깍 삼키며', '큰 축복 같아요', '다채로운', '소장 가치', '~했답니다', '~느낌이었답니다'
 2. [문미 변형 규칙]: '눈을 떼지 못해요' -> '눈을 떼지 못하더라구요'로 서술. 담백한 문미('~했어요', '~하더라구요', '~하기 수월해요') 위주 사용.
 3. [태그 # 제거]: '#' 기호 절대 금지. 순수 단어로만 작성.
-4. [표 규격]: [{"항목": "...", "내용": "..."}] JSON 리스트로 응답. 총평 표는 각 항목당 2~3줄 이상 풍성하게 작성.
-5. [본문 스타일]: 옵션 분리 없이, 사실 기반 설명과 실제 경험/반응을 가장 매끄럽게 결합한 단일 완성형 본문(content)으로 3~4줄 내외 작성.
+4. [표 규격]: [{"항목": "...", "내용": "..."}] JSON 리스트로 응답. 총평 표는 각 항목당 2~3줄 이상 작성.
+5. [본문 스타일]: 옵션 분리 없이, 사실 기반 설명과 실제 반응을 깔끔하게 결합한 단일 완성형 본문(content)으로 3줄 내외 작성.
 
 반드시 아래 JSON 포맷으로만 응답:
 {
@@ -343,7 +385,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 
 등록된 정보 사진 {len(info_images)}장과 본문 사진 {len(pasted_images)}장을 분석해서 포스팅을 작성해줘.
 본문 사진 2번부터 {len(pasted_images)}번까지 각 사진에 해당하는 body_sections를 빠짐없이 순서대로 작성해줘.
-순수 JSON 형식으로만 응답해줘.
+글이 중간에 끊기지 않도록 JSON 괄호를 끝까지 완벽하게 닫아서 응답해줘.
 """
 
         payload = [prompt_text]
@@ -353,7 +395,6 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         payload.append("\n[본문 포스팅 사진]:\n")
         payload.extend(pasted_images)
 
-        # 🚨 엄격한 단일 호출 (반복 루프 없음, 최대 출력 토큰 4000 제한으로 요금 보호)
         res = None
         try:
             res = client.models.generate_content(
@@ -362,7 +403,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                 config=dict(
                     system_instruction=system_instruction,
                     response_mime_type="application/json",
-                    max_output_tokens=4000
+                    max_output_tokens=8192
                 )
             )
         except Exception as e:
@@ -370,15 +411,9 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 
         if res and res.text:
             try:
-                raw = res.text.strip()
-                if raw.startswith("```json"):
-                    raw = raw[7:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                data = json.loads(raw.strip())
+                data = robust_json_parser(res.text)
                 st.session_state["result_data"] = data
                 
-                # 로컬 백업 자동 저장 (파일 1개만 관리)
                 with open(BACKUP_FILE_PATH, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
