@@ -39,13 +39,13 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# [설정 및 신규 API 키]
+# [설정 및 API 클라이언트]
 # ==========================================
 GEMINI_API_KEY = "AQ.Ab8RN6Kl5WbrGnOp2GKXYJmZroPMzk157fLR3Z8FrbcOlehR3Q"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# [세션 상태 관리: 사진 보관함 & 결과 데이터]
+# [세션 상태 관리]
 # ==========================================
 if "cur_body_images" not in st.session_state:
     st.session_state["cur_body_images"] = []
@@ -53,7 +53,6 @@ if "cur_info_images" not in st.session_state:
     st.session_state["cur_info_images"] = []
 if "processed_upload_token" not in st.session_state:
     st.session_state["processed_upload_token"] = ""
-
 if "result_data" not in st.session_state:
     st.session_state["result_data"] = None
 
@@ -65,15 +64,15 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
 
-def process_to_light_image(file_bytes, max_dim=500):
+def process_to_light_image(file_bytes, max_dim=380):
+    """다량 이미지 업로드 시 전송 및 분석 속도 최적화를 위해 380px로 가볍게 압축"""
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        # 압축된 바이트로 깔끔하게 재생성
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=75)
+        img.save(buf, format="JPEG", quality=70, optimize=True)
         buf.seek(0)
         return Image.open(buf)
     except Exception:
@@ -122,13 +121,14 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("초경량 500px 파이프라인 | ZIP 안정 인식 & 순서 변경 | 무료 티어 가동")
+st.caption("초고속 380px 파이프라인 | 타임아웃 방어 | PC & 태블릿 호환")
 
-# 백업 복구 영역
-if os.path.exists(BACKUP_FILE_PATH):
-    rec_col1, rec_col2 = st.columns([3, 1])
-    rec_col1.info("💡 새로고침이나 앱 전환으로 글이 사라졌다면 복구 버튼을 누르세요!")
-    if rec_col2.button("🔄 최근 생성 글 복구", use_container_width=True):
+# 상시 복구 바 영역
+rec_col1, rec_col2 = st.columns([3, 1])
+has_backup = os.path.exists(BACKUP_FILE_PATH)
+rec_col1.info("💡 새로고침이나 화면 전환으로 글이 사라졌다면 오른쪽 복구 버튼을 누르세요.")
+if rec_col2.button("🔄 최근 생성 글 복구", use_container_width=True, disabled=not has_backup):
+    if has_backup:
         try:
             with open(BACKUP_FILE_PATH, "r", encoding="utf-8") as f:
                 st.session_state["result_data"] = json.load(f)
@@ -136,6 +136,8 @@ if os.path.exists(BACKUP_FILE_PATH):
             st.rerun()
         except Exception as e:
             st.error(f"복구 실패: {e}")
+    else:
+        st.warning("저장된 이전 백업이 없습니다.")
 
 category = st.selectbox("카테고리", ["책육아", "장난감·교구", "방문한 곳", "물건", "음식"])
 item_name = st.text_input("장소 / 상호 / 제품명", placeholder="예: 키즈아이콘 다이소 뽀로로 스티커 놀이북")
@@ -183,10 +185,10 @@ st.write("---")
 
 # 2. 본문 사진 등록
 st.markdown("#### 📷 본문 사진 (필수)")
-st.info("💡 **갤러리에서 사진들을 ZIP으로 압축**해서 올리면 한 번에 쏙 등록됩니다!")
+st.info("💡 **사진들을 ZIP으로 압축**해서 올리거나, PC에서는 여러 장을 한 번에 끌어다 놓으세요!")
 
 body_files = st.file_uploader(
-    "본문 사진 선택 (사진 개별 선택 또는 ZIP 압축 파일)", 
+    "본문 사진 선택 (사진 개별 다중 선택 또는 ZIP 압축 파일)", 
     type=["jpg", "jpeg", "png", "webp", "zip"],
     accept_multiple_files=True,
     key="uploader_body"
@@ -204,7 +206,6 @@ if body_files:
                 if f.name.lower().endswith(".zip"):
                     try:
                         with zipfile.ZipFile(io.BytesIO(b)) as z:
-                            # 1, 2, 10 순서 자연 정렬
                             file_list = sorted(z.namelist(), key=natural_sort_key)
                             for filename in file_list:
                                 if "__MACOSX" in filename or os.path.basename(filename).startswith("."):
@@ -215,7 +216,7 @@ if body_files:
                                     if im:
                                         loaded_imgs.append(im)
                     except Exception as e:
-                        st.error(f"ZIP 해제 중 오류가 발생했습니다: {e}")
+                        st.error(f"ZIP 해제 중 오류: {e}")
                 else:
                     im = process_to_light_image(b)
                     if im:
@@ -230,7 +231,7 @@ if st.session_state["cur_body_images"]:
     img_list = st.session_state["cur_body_images"]
     
     col_t1, col_t2 = st.columns([3, 1])
-    col_t1.success(f"🎉 총 {len(img_list)}장의 사진이 정상 등록되었습니다! 순서를 확인하고 아래 생성을 눌러주세요.")
+    col_t1.success(f"🎉 총 {len(img_list)}장의 사진이 등록되었습니다. 순서를 배치해 주세요!")
     if col_t2.button("🗑️ 사진 전체 삭제"):
         st.session_state["cur_body_images"] = []
         st.session_state["processed_upload_token"] = ""
@@ -245,29 +246,24 @@ if st.session_state["cur_body_images"]:
                     st.image(img_list[idx], caption=f"사진 {idx+1}{' (⭐ 대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
                     
                     b_cols = st.columns(5)
-                    # 맨앞으로
                     if idx > 0:
                         if b_cols[0].button("⏮️맨앞", key=f"first_{idx}", help="1번 대표 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.insert(0, item)
                             st.rerun()
-                    # 한칸 앞으로
                     if idx > 0:
                         if b_cols[1].button("⬅️앞", key=f"up_{idx}"):
                             img_list[idx - 1], img_list[idx] = img_list[idx], img_list[idx - 1]
                             st.rerun()
-                    # 한칸 뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[2].button("➡️뒤", key=f"down_{idx}"):
                             img_list[idx + 1], img_list[idx] = img_list[idx], img_list[idx + 1]
                             st.rerun()
-                    # 맨뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[3].button("⏭️맨뒤", key=f"last_{idx}", help="마지막 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.append(item)
                             st.rerun()
-                    # 삭제
                     if b_cols[4].button("❌", key=f"del_{idx}", help="이 사진 삭제"):
                         img_list.pop(idx)
                         st.rerun()
@@ -287,7 +283,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.warning("본문 사진을 최소 1장 이상 등록해 주세요.")
         st.stop()
 
-    with st.spinner("⚡ 사진 분석 및 맞춤 본문 작성 중... (약 15~20초)"):
+    with st.spinner(f"⚡ 사진 {len(st.session_state['cur_body_images'])}장 분석 및 글 작성 중... 약 25~35초 소요됩니다."):
         pasted_images = st.session_state["cur_body_images"]
         info_images = st.session_state["cur_info_images"]
 
@@ -300,7 +296,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
 2. [문미 변형 규칙]: '눈을 떼지 못해요' -> '눈을 떼지 못하더라구요'로 서술. 담백한 문미('~했어요', '~하더라구요', '~하기 수월해요') 위주 사용.
 3. [태그 # 제거]: '#' 기호 절대 금지. 순수 단어로만 작성.
 4. [표 규격]: [{"항목": "...", "내용": "..."}] JSON 리스트로 응답. 총평 표는 각 항목당 2~3줄 이상 풍성하게 작성.
-5. [본문 스타일]: 옵션 분리 없이, 사실 기반 설명과 실제 경험/반응을 가장 매끄럽게 결합한 단일 완성형 본문(content)으로 작성할 것.
+5. [본문 스타일]: 옵션 분리 없이, 사실 기반 설명과 실제 경험/반응을 가장 매끄럽게 결합한 단일 완성형 본문(content)으로 3~4줄 내외 작성.
 
 반드시 아래 JSON 포맷으로만 응답:
 {
@@ -325,7 +321,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
       "photo_index": 2,
       "subheading": "스마트에디터용 소제목 (필요 시 작성, 없으면 빈 문자열)",
       "tags": "사진 하단 태그 2~3단어 (# 제외)",
-      "content": "해당 사진에 딱 맞춘 단일 완성형 본문 (직관적인 사실 설명과 솔직한 반응을 담아 3~4줄 내외로 충실하게 작성)"
+      "content": "해당 사진에 맞춘 단일 완성형 본문"
     }
   ],
   "review_table_data": [
@@ -371,11 +367,11 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                 break
             except Exception as e:
                 err_str = str(e)
-                if "503" in err_str and attempt == 0:
+                if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt == 0:
                     time.sleep(3)
                     continue
                 else:
-                    st.error(f"오류가 발생했습니다: {e}")
+                    st.error(f"서버 응답 오류: {e}")
                     break
 
         if res and res.text:
@@ -388,19 +384,19 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                 data = json.loads(raw.strip())
                 st.session_state["result_data"] = data
                 
-                # 파일로 자동 로컬 백업 저장 (리셋 방어)
+                # 로컬 백업 자동 저장
                 with open(BACKUP_FILE_PATH, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 st.error(f"결과 데이터 파싱 오류: {e}")
 
 # ==========================================
-# [결과 출력 리스트 렌더링 - 1:1 사진 카드 구조]
+# [결과 출력 리스트 렌더링]
 # ==========================================
 if st.session_state["result_data"]:
     data = st.session_state["result_data"]
     
-    st.success("🎉 글 작성이 완료되었습니다! 각 카드의 복사 버튼을 눌러 스마트에디터에 바로 붙여넣으세요.")
+    st.success("🎉 작성이 완료되었습니다! 복사 버튼을 눌러 에디터에 붙여넣으세요.")
     
     with st.expander("📌 네이버 추천 제목 (선택 복사)", expanded=True):
         for i, t in enumerate(data.get("titles", []), start=1):
@@ -435,7 +431,7 @@ if st.session_state["result_data"]:
         if s_table:
             for r in s_table:
                 st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
-            render_smart_copy_button("", button_label="📊 요약 표 복사 (스마트에디터 붙여넣기 시 표 자동 변환)", is_table=True, table_data=s_table)
+            render_smart_copy_button("", button_label="📊 요약 표 복사 (스마트에디터 표 자동 변환)", is_table=True, table_data=s_table)
 
     with st.expander("✍️ 사진별 소제목 & 본문 내용 (단일 완성형)", expanded=True):
         for sec in data.get("body_sections", []):
@@ -464,7 +460,7 @@ if st.session_state["result_data"]:
         if r_table:
             for r in r_table:
                 st.markdown(f"• **{r.get('항목')}**: {r.get('내용')}")
-            render_smart_copy_button("", button_label="📊 총평 표 복사 (스마트에디터 붙여넣기 시 표 자동 변환)", is_table=True, table_data=r_table)
+            render_smart_copy_button("", button_label="📊 총평 표 복사 (스마트에디터 표 자동 변환)", is_table=True, table_data=r_table)
             st.write("")
             
         closing = data.get("closing_remarks", "")
