@@ -39,9 +39,9 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ==========================================
-# [설정 및 API 클라이언트]
+# [설정 및 신규 유료 API 키 연동]
 # ==========================================
-GEMINI_API_KEY = "AQ.Ab8RN6Kl5WbrGnOp2GKXYJmZroPMzk157fLR3Z8FrbcOlehR3Q"
+GEMINI_API_KEY = "AQ.Ab8RN6L0BRlxvtCiCV8AAE6HPgjsuqLn6UWIcQXN0_7So3THuA"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
@@ -65,7 +65,7 @@ def natural_sort_key(s):
 
 
 def process_to_light_image(file_bytes, max_dim=380):
-    """다량 이미지 업로드 시 전송 및 분석 속도 최적화를 위해 380px로 가볍게 압축"""
+    """비용 절약 및 고속 처리를 위한 380px 초경량 JPEG 압축 파이프라인"""
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode in ("RGBA", "P"):
@@ -121,7 +121,7 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("초고속 380px 파이프라인 | 타임아웃 방어 | PC & 태블릿 호환")
+st.caption("초경량 파이프라인 | 과금 방어 단일 호출 | 1회 생성 약 2~3원")
 
 # 상시 복구 바 영역
 rec_col1, rec_col2 = st.columns([3, 1])
@@ -272,7 +272,7 @@ if st.session_state["cur_body_images"]:
 st.write("---")
 
 # ==========================================
-# [생성 버튼 및 호출 로직]
+# [생성 버튼 및 호출 로직 (엄격한 단일 호출)]
 # ==========================================
 if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_container_width=True):
     if not item_name or not target_keyword:
@@ -283,7 +283,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         st.warning("본문 사진을 최소 1장 이상 등록해 주세요.")
         st.stop()
 
-    with st.spinner(f"⚡ 사진 {len(st.session_state['cur_body_images'])}장 분석 및 글 작성 중... 약 25~35초 소요됩니다."):
+    with st.spinner(f"⚡ 사진 {len(st.session_state['cur_body_images'])}장 분석 및 초안 생성 중... (약 15~20초 소요)"):
         pasted_images = st.session_state["cur_body_images"]
         info_images = st.session_state["cur_info_images"]
 
@@ -353,26 +353,20 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
         payload.append("\n[본문 포스팅 사진]:\n")
         payload.extend(pasted_images)
 
+        # 🚨 엄격한 단일 호출 (반복 루프 없음, 최대 출력 토큰 4000 제한으로 요금 보호)
         res = None
-        for attempt in range(2):
-            try:
-                res = client.models.generate_content(
-                    model='gemini-3.8-flash',
-                    contents=payload,
-                    config=dict(
-                        system_instruction=system_instruction,
-                        response_mime_type="application/json"
-                    )
+        try:
+            res = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=payload,
+                config=dict(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    max_output_tokens=4000
                 )
-                break
-            except Exception as e:
-                err_str = str(e)
-                if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt == 0:
-                    time.sleep(3)
-                    continue
-                else:
-                    st.error(f"서버 응답 오류: {e}")
-                    break
+            )
+        except Exception as e:
+            st.error(f"호출 오류가 발생했습니다: {e}")
 
         if res and res.text:
             try:
@@ -384,7 +378,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                 data = json.loads(raw.strip())
                 st.session_state["result_data"] = data
                 
-                # 로컬 백업 자동 저장
+                # 로컬 백업 자동 저장 (파일 1개만 관리)
                 with open(BACKUP_FILE_PATH, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
