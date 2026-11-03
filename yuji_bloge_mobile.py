@@ -49,13 +49,10 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # ==========================================
 if "cur_body_images" not in st.session_state:
     st.session_state["cur_body_images"] = []
-if "last_body_sig" not in st.session_state:
-    st.session_state["last_body_sig"] = ""
-
 if "cur_info_images" not in st.session_state:
     st.session_state["cur_info_images"] = []
-if "last_info_sig" not in st.session_state:
-    st.session_state["last_info_sig"] = ""
+if "processed_upload_token" not in st.session_state:
+    st.session_state["processed_upload_token"] = ""
 
 if "result_data" not in st.session_state:
     st.session_state["result_data"] = None
@@ -74,7 +71,11 @@ def process_to_light_image(file_bytes, max_dim=500):
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        return img
+        # 압축된 바이트로 깔끔하게 재생성
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        buf.seek(0)
+        return Image.open(buf)
     except Exception:
         return None
 
@@ -121,12 +122,12 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
 # [메인 화면 구성]
 # ==========================================
 st.title("✍️ 네이버 블로그 맞춤 초안 생성기")
-st.caption("초경량 500px 최적화 | 최근 글 1초 복구 기능 탑재")
+st.caption("초경량 500px 파이프라인 | ZIP 안정 인식 & 순서 변경 | 무료 티어 가동")
 
-# 백업 파일 존재 시 복구 안내 바
+# 백업 복구 영역
 if os.path.exists(BACKUP_FILE_PATH):
     rec_col1, rec_col2 = st.columns([3, 1])
-    rec_col1.info("💡 앱 전환이나 새로고침으로 글이 사라졌다면 오른쪽 복구 버튼을 누르세요!")
+    rec_col1.info("💡 새로고침이나 앱 전환으로 글이 사라졌다면 복구 버튼을 누르세요!")
     if rec_col2.button("🔄 최근 생성 글 복구", use_container_width=True):
         try:
             with open(BACKUP_FILE_PATH, "r", encoding="utf-8") as f:
@@ -146,37 +147,34 @@ st.write("---")
 # 1. 정보 사진 등록
 st.markdown("#### 📌 메뉴판 / 스펙 / 정보 사진 (선택)")
 info_files = st.file_uploader(
-    "정보 사진 선택 (또는 ZIP 파일)", 
+    "정보 사진 선택 (개별 사진 또는 ZIP 파일)", 
     type=["jpg", "jpeg", "png", "webp", "zip"],
     accept_multiple_files=True,
     key="uploader_info"
 )
 
 if info_files:
-    info_sig = "".join([f.name + str(f.size) for f in info_files])
-    if st.session_state["last_info_sig"] != info_sig:
-        st.session_state["last_info_sig"] = info_sig
-        parsed_info = []
-        for f in info_files:
-            f.seek(0)
-            b = f.read()
-            if f.name.lower().endswith(".zip"):
-                try:
-                    with zipfile.ZipFile(io.BytesIO(b)) as z:
-                        for filename in sorted(z.namelist(), key=natural_sort_key):
-                            if "__MACOSX" in filename or filename.startswith("."):
-                                continue
-                            if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                                im = process_to_light_image(z.read(filename))
-                                if im:
-                                    parsed_info.append(im)
-                except Exception:
-                    pass
-            else:
-                im = process_to_light_image(b)
-                if im:
-                    parsed_info.append(im)
-        st.session_state["cur_info_images"] = parsed_info
+    parsed_info = []
+    for f in info_files:
+        f.seek(0)
+        b = f.read()
+        if f.name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(b)) as z:
+                    for filename in sorted(z.namelist(), key=natural_sort_key):
+                        if "__MACOSX" in filename or filename.startswith("."):
+                            continue
+                        if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                            im = process_to_light_image(z.read(filename))
+                            if im:
+                                parsed_info.append(im)
+            except Exception:
+                pass
+        else:
+            im = process_to_light_image(b)
+            if im:
+                parsed_info.append(im)
+    st.session_state["cur_info_images"] = parsed_info
 
 if st.session_state["cur_info_images"]:
     st.caption(f"등록된 정보 사진: 총 {len(st.session_state['cur_info_images'])}장")
@@ -185,7 +183,7 @@ st.write("---")
 
 # 2. 본문 사진 등록
 st.markdown("#### 📷 본문 사진 (필수)")
-st.info("💡 **갤러리에서 여러 장을 ZIP으로 압축**해서 올리면 한 번에 쏙 들어옵니다!")
+st.info("💡 **갤러리에서 사진들을 ZIP으로 압축**해서 올리면 한 번에 쏙 등록됩니다!")
 
 body_files = st.file_uploader(
     "본문 사진 선택 (사진 개별 선택 또는 ZIP 압축 파일)", 
@@ -194,42 +192,48 @@ body_files = st.file_uploader(
     key="uploader_body"
 )
 
+# 파일 업로드 즉각 감지 및 파싱 로직
 if body_files:
-    body_sig = "".join([f.name + str(f.size) for f in body_files])
-    if st.session_state["last_body_sig"] != body_sig:
-        st.session_state["last_body_sig"] = body_sig
-        new_loaded = []
-        with st.spinner("📦 사진 최적화 중..."):
+    current_token = "|".join([f"{f.name}_{f.size}" for f in body_files])
+    if st.session_state["processed_upload_token"] != current_token:
+        loaded_imgs = []
+        with st.spinner("📦 사진을 추출하고 가볍게 최적화하는 중입니다..."):
             for f in body_files:
                 f.seek(0)
                 b = f.read()
                 if f.name.lower().endswith(".zip"):
                     try:
                         with zipfile.ZipFile(io.BytesIO(b)) as z:
-                            for filename in sorted(z.namelist(), key=natural_sort_key):
-                                if "__MACOSX" in filename or filename.startswith("."):
+                            # 1, 2, 10 순서 자연 정렬
+                            file_list = sorted(z.namelist(), key=natural_sort_key)
+                            for filename in file_list:
+                                if "__MACOSX" in filename or os.path.basename(filename).startswith("."):
                                     continue
                                 if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                                    im = process_to_light_image(z.read(filename))
+                                    img_bytes = z.read(filename)
+                                    im = process_to_light_image(img_bytes)
                                     if im:
-                                        new_loaded.append(im)
+                                        loaded_imgs.append(im)
                     except Exception as e:
-                        st.error(f"압축 파일 해제 오류: {e}")
+                        st.error(f"ZIP 해제 중 오류가 발생했습니다: {e}")
                 else:
                     im = process_to_light_image(b)
                     if im:
-                        new_loaded.append(im)
-            st.session_state["cur_body_images"] = new_loaded
+                        loaded_imgs.append(im)
+
+        st.session_state["cur_body_images"] = loaded_imgs
+        st.session_state["processed_upload_token"] = current_token
+        st.rerun()
 
 # 본문 사진 순서 조정 및 미리보기 영역
 if st.session_state["cur_body_images"]:
     img_list = st.session_state["cur_body_images"]
     
     col_t1, col_t2 = st.columns([3, 1])
-    col_t1.success(f"🎉 총 {len(img_list)}장의 사진이 등록되었습니다! 순서를 확인해 주세요.")
+    col_t1.success(f"🎉 총 {len(img_list)}장의 사진이 정상 등록되었습니다! 순서를 확인하고 아래 생성을 눌러주세요.")
     if col_t2.button("🗑️ 사진 전체 삭제"):
         st.session_state["cur_body_images"] = []
-        st.session_state["last_body_sig"] = ""
+        st.session_state["processed_upload_token"] = ""
         st.rerun()
 
     for i in range(0, len(img_list), 2):
@@ -241,24 +245,29 @@ if st.session_state["cur_body_images"]:
                     st.image(img_list[idx], caption=f"사진 {idx+1}{' (⭐ 대표 썸네일)' if idx == 0 else ''}", use_container_width=True)
                     
                     b_cols = st.columns(5)
+                    # 맨앞으로
                     if idx > 0:
                         if b_cols[0].button("⏮️맨앞", key=f"first_{idx}", help="1번 대표 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.insert(0, item)
                             st.rerun()
+                    # 한칸 앞으로
                     if idx > 0:
                         if b_cols[1].button("⬅️앞", key=f"up_{idx}"):
                             img_list[idx - 1], img_list[idx] = img_list[idx], img_list[idx - 1]
                             st.rerun()
+                    # 한칸 뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[2].button("➡️뒤", key=f"down_{idx}"):
                             img_list[idx + 1], img_list[idx] = img_list[idx], img_list[idx + 1]
                             st.rerun()
+                    # 맨뒤로
                     if idx < len(img_list) - 1:
                         if b_cols[3].button("⏭️맨뒤", key=f"last_{idx}", help="마지막 사진으로 이동"):
                             item = img_list.pop(idx)
                             img_list.append(item)
                             st.rerun()
+                    # 삭제
                     if b_cols[4].button("❌", key=f"del_{idx}", help="이 사진 삭제"):
                         img_list.pop(idx)
                         st.rerun()
@@ -379,7 +388,7 @@ if st.button("✨ 블로그 맞춤 초안 생성하기", type="primary", use_con
                 data = json.loads(raw.strip())
                 st.session_state["result_data"] = data
                 
-                # 파일로 자동 로컬 백업 저장 (리셋 방어용)
+                # 파일로 자동 로컬 백업 저장 (리셋 방어)
                 with open(BACKUP_FILE_PATH, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
