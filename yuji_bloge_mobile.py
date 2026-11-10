@@ -1,22 +1,3 @@
-보내준 블로그 카테고리 체계, 하용이(2024년 10월 22일생) 데이터, 그리고 카테고리별 맞춤 뉘앙스(장소/물건/책육아 등)를 완벽하게 반영하고, 골칫거리였던 표 복사 문제와 무분별한 소제목/태그 반복 문제를 싹 고친 **최종 완성본 전체 코드**야!
-
----
-
-### 이번 최종 수정 핵심 포인트
-
-1. **블로그 실제 카테고리 9개 완벽 연동**: `책육아`, `하용이 장난감·교구`, `내가 방문한 곳`, `내가 써본 물건`, `내가 먹은 음식`, `누리와 리치`, `하용이 육아`, `여행`, `일상`
-2. **카테고리별 맞춤 뉘앙스 & 브릿지**: 장소 후기에는 "들이기 전에~" 같은 엉뚱한 문구가 안 나오고, 방문/여행/책육아 카테고리에 맞는 자연스러운 독백과 브릿지 적용.
-3. **하용이(2024년 10월 22일생) 데이터 고정**: 현재 개월 수와 발달 상황에 맞는 리얼한 찐후기 뉘앙스 반영.
-4. **소제목 & 사진 태그 대개조**: 사진마다 강제로 소제목을 붙이지 않고, 글의 흐름상 핵심 전환점에만 검색 유입(C-Rank & VIEW)에 유리한 롱테일 키워드 소제목과 태그가 들어가도록 변경.
-5. **안전한 텍스트 표 컴포넌트로 변경**: 에디터에서 표 깨짐 현상을 원천 차단하기 위해, 항목과 내용을 깔끔하게 복사해서 붙여넣을 수 있는 직관적인 텍스트 표 복사 방식으로 전환.
-
----
-
-### 💻 최종 전체 코드 (`yuji_bloge_mobile.py`)
-
-GitHub 편집창에서 전체 선택 후 아래 코드로 덮어써 줘!
-
-```python
 import io
 import json
 import os
@@ -188,7 +169,6 @@ def render_smart_copy_button(text_to_copy, button_label="📋 복사", is_table=
     btn_id = f"btn_{abs(hash(button_label + str(text_to_copy)))}"
     
     if is_table and table_data:
-        # 텍스트 기반 깔끔한 표 포맷 생성 (에디터 표 깨짐 방지)
         tsv_lines = [f"{row.get('항목', '')} : {row.get('내용', '')}" for row in table_data]
         plain_text = "\\n".join(tsv_lines).replace('"', '\\"').replace("'", "\\'").replace("\r", "")
 
@@ -276,7 +256,6 @@ if rec_col2.button("🔄 최근 생성 글 복구", use_container_width=True, di
     else:
         st.warning("저장된 이전 백업이 없습니다.")
 
-# 사용자 블로그 카테고리 9개 완벽 연동
 category = st.selectbox(
     "블로그 카테고리 선택", 
     [
@@ -620,5 +599,3 @@ if st.session_state["result_data"]:
             comma_tags = ", ".join([t.replace("#", "").strip() for t in tags])
             st.code(comma_tags)
             render_smart_copy_button(comma_tags, "태그 전체 복사 (쉼표 구분)")
-
-```
